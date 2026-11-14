@@ -22,4 +22,5 @@ export type Place = {
   description?: string;
   thumb?: string;
   articles: ArticleRef[]; // from every provider; chips in the sheet = this list
+  category?: string;      // from Wikidata's class hierarchy (see categories.ts)
 };

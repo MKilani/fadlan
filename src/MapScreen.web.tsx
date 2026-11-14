@@ -13,6 +13,7 @@ import { languageName } from './attribution';
 import { regionOf } from './theme/regions';
 import { useTheme } from './theme/ThemeProvider';
 import { loadPatchedStyle } from './theme/styleFix';
+import { assignCategories, CATEGORIES } from './categories';
 import SettingsModal from './SettingsModal';
 import PlaceSheet from './PlaceSheet';
 import type { LatLon, Place } from './types';
@@ -44,6 +45,7 @@ export default function MapScreen() {
   const [status, setStatus] = useState<'locating' | 'denied' | 'ready'>('locating');
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [offCats, setOffCats] = useState<string[]>(['other']);   // categories hidden by the user (Other is hidden by default)
   const [style, setStyle] = useState<any>(null);
   const [spider, setSpider] = useState<{ leaves: Place[]; center: LatLon; clusterId: number } | null>(null);
   const [virtual, setVirtual] = useState<LatLon | null>(null);   // null = real position
@@ -70,9 +72,11 @@ export default function MapScreen() {
     if (next.length) setPicked(next);
   };
 
+  // Places still being classified (no category yet) stay visible until their category is known.
   const visiblePlaces = useMemo(
-    () => places.filter((p) => p.articles.some((a) => activeLangs.includes(a.lang))),
-    [places, activeLangs],
+    () => places.filter((p) =>
+      p.articles.some((a) => activeLangs.includes(a.lang)) && (!p.category || !offCats.includes(p.category))),
+    [places, activeLangs, offCats],
   );
   const collection = useMemo(() => ({
     type: 'FeatureCollection' as const,
@@ -100,6 +104,16 @@ export default function MapScreen() {
         found.forEach((p) => byId.set(p.id, p));
         return [...byId.values()];
       });
+      // Categories are added after the places are shown, so the map is never blocked by the lookups.
+      assignCategories(found)
+        .then((withCats) => {
+          setPlaces((prev) => {
+            const byId = new Map(prev.map((p) => [p.id, p]));
+            withCats.forEach((p) => byId.set(p.id, p));
+            return [...byId.values()];
+          });
+        })
+        .catch((e) => console.warn('Fadlan: categories failed', String(e)));
     } finally {
       setLoading(false);
     }
@@ -339,10 +353,11 @@ export default function MapScreen() {
     langBar: { position: 'absolute', top: 52, left: 12, right: 84 },
     lchip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: theme.shape.chipRadius, backgroundColor: c.background, borderWidth: 1, borderColor: c.chipOn },
     lchipText: { fontSize: 12, fontFamily: theme.fonts.body, fontWeight: '600' },
-    count: { position: 'absolute', top: 100, left: 12, paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.shape.chipRadius, backgroundColor: c.background },
+    count: { position: 'absolute', top: 132, left: 12, paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.shape.chipRadius, backgroundColor: c.background },
     countText: { fontSize: 11, color: c.muted, fontFamily: theme.fonts.body },
     styleBtn: { position: 'absolute', top: 52, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     styleBtnText: { color: c.ink, fontWeight: '600', fontFamily: theme.fonts.body },
+    catBar: { position: 'absolute', top: 92, left: 12, right: 84 },
     posBtn: { position: 'absolute', top: 96, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     myBtn: { position: 'absolute', top: 140, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     pickWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12 },
@@ -392,6 +407,23 @@ export default function MapScreen() {
           </ScrollView>
         </View>
       )}
+
+      <View style={styles.catBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+          {CATEGORIES.map((cat) => {
+            const on = !offCats.includes(cat.id);
+            return (
+              <Pressable
+                key={cat.id}
+                onPress={() => setOffCats((o) => (o.includes(cat.id) ? o.filter((x) => x !== cat.id) : [...o, cat.id]))}
+                style={[styles.lchip, on && { backgroundColor: c.chipOn }]}
+              >
+                <Text style={[styles.lchipText, { color: on ? c.chipOnText : c.chipText }]}>{cat.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       <View style={styles.count} pointerEvents="none">
         <Text style={styles.countText}>{picking ? 'Tap the map to set your position' : loading ? 'Searching...' : virtual ? `${visiblePlaces.length} places \u00B7 virtual position` : `${visiblePlaces.length} places`}</Text>
