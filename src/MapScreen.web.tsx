@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Location from 'expo-location';
-import { Map as MapLibreMap, NavigationControl } from 'maplibre-gl';
+import { Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { RADIUS_M, REFETCH_FRACTION } from './config';
 import { countryCode, languagesForCountry, pickEditions, userLanguage } from './languages';
@@ -112,6 +112,8 @@ export default function MapScreen() {
   // Create the map once the style and position are known; recreate when the map style changes.
   useEffect(() => {
     if (!style || !pos || !containerRef.current) return;
+    // The worker file sits next to the page (copied from public/ at build time).
+    setWorkerUrl(new URL('maplibre-gl-worker.mjs', window.location.href).href);
     const map = new MapLibreMap({
       container: containerRef.current,
       style,
