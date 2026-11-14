@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Location from 'expo-location';
-import maplibregl from 'maplibre-gl';
+import { Map as MapLibreMap, NavigationControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { RADIUS_M, REFETCH_FRACTION } from './config';
 import { countryCode, languagesForCountry, pickEditions, userLanguage } from './languages';
@@ -36,7 +36,7 @@ export default function MapScreen() {
   const [clusterPick, setClusterPick] = useState<Place[] | null>(null);
 
   const containerRef = useRef<any>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
   const lastQuery = useRef<LatLon | null>(null);
   const visibleRef = useRef<Place[]>([]);
   const collectionRef = useRef<any>(null);
@@ -112,14 +112,14 @@ export default function MapScreen() {
   // Create the map once the style and position are known; recreate when the map style changes.
   useEffect(() => {
     if (!style || !pos || !containerRef.current) return;
-    const map = new maplibregl.Map({
+    const map = new MapLibreMap({
       container: containerRef.current,
       style,
       center: [pos.lon, pos.lat],
       zoom: 14,
     });
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+    map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right');
 
     map.on('load', () => {
       map.addSource(SOURCE, {
