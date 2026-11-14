@@ -19,6 +19,18 @@ import type { LatLon, Place } from './types';
 
 const SOURCE = 'places';
 const FONT = ['Noto Sans Regular'];
+const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] as any[] };
+const pointFC = (ll: LatLon | null) => (ll
+  ? { type: 'FeatureCollection' as const, features: [{ type: 'Feature' as const, properties: {}, geometry: { type: 'Point' as const, coordinates: [ll.lon, ll.lat] } }] }
+  : EMPTY_FC);
+
+// Works with both the callback and the promise forms of the library's cluster API.
+function getLeaves(src: any, clusterId: number): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    const ret = src.getClusterLeaves(clusterId, 500, 0, (err: any, leaves: any[]) => (err ? reject(err) : resolve(leaves)));
+    if (ret && typeof ret.then === 'function') ret.then(resolve, reject);
+  });
+}
 
 export default function MapScreen() {
   const { theme, mapStyle, setRegion } = useTheme();
@@ -33,7 +45,14 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [style, setStyle] = useState<any>(null);
-  const [clusterPick, setClusterPick] = useState<Place[] | null>(null);
+  const [spider, setSpider] = useState<{ leaves: Place[]; center: LatLon } | null>(null);
+  const [virtual, setVirtual] = useState<LatLon | null>(null);   // null = real position
+  const [picking, setPicking] = useState(false);
+  const virtualRef = useRef<LatLon | null>(null);
+  const pickingRef = useRef(false);
+  virtualRef.current = virtual;
+  pickingRef.current = picking;
+  const here = virtual ?? pos;   // where the user is "standing": drives distances and place search
 
   const containerRef = useRef<any>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -99,6 +118,24 @@ export default function MapScreen() {
 
   useEffect(() => { locate(); }, [locate]);
 
+  // Set the virtual position: the app behaves as if the user were there.
+  const setVirtualAt = (ll: LatLon) => {
+    setVirtual(ll);
+    setPicking(false);
+    setSpider(null);
+    load(ll);
+  };
+
+  // Back to the real position.
+  const backToReal = () => {
+    if (!pos) return;
+    setVirtual(null);
+    setPicking(false);
+    setSpider(null);
+    mapRef.current?.easeTo({ center: [pos.lon, pos.lat], zoom: 14, duration: 500 });
+    load(pos);
+  };
+
   // Map style (base map), with its label font fixed.
   useEffect(() => {
     let live = true;
@@ -138,6 +175,24 @@ export default function MapScreen() {
         layout: { 'text-field': ['get', 'name'], 'text-size': 11, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-optional': true, 'text-font': FONT },
         paint: { 'text-color': c.ink, 'text-halo-color': c.halo, 'text-halo-width': 1.5 } });
 
+      // Virtual position: orange dot (the real position stays blue).
+      map.addSource('virtual', { type: 'geojson', data: pointFC(virtualRef.current) as any });
+      map.addLayer({ id: 'virtual-ring', type: 'circle', source: 'virtual',
+        paint: { 'circle-radius': 12, 'circle-color': '#D9733A', 'circle-opacity': 0.25 } });
+      map.addLayer({ id: 'virtual-dot', type: 'circle', source: 'virtual',
+        paint: { 'circle-radius': 6, 'circle-color': '#D9733A', 'circle-stroke-width': 2, 'circle-stroke-color': '#FFFFFF' } });
+
+      // Spread-out cluster: lines from the cluster centre to each place, and the places themselves.
+      map.addSource('spider-lines', { type: 'geojson', data: EMPTY_FC as any });
+      map.addSource('spider-points', { type: 'geojson', data: EMPTY_FC as any });
+      map.addLayer({ id: 'spider-lines', type: 'line', source: 'spider-lines',
+        paint: { 'line-color': c.ink, 'line-width': 1.5, 'line-opacity': 0.7 } });
+      map.addLayer({ id: 'spider-points', type: 'circle', source: 'spider-points',
+        paint: { 'circle-radius': 7, 'circle-color': c.markerSelected, 'circle-stroke-width': 2, 'circle-stroke-color': c.markerStroke } });
+      map.addLayer({ id: 'spider-labels', type: 'symbol', source: 'spider-points',
+        layout: { 'text-field': ['get', 'name'], 'text-size': 12, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-optional': true, 'text-font': FONT },
+        paint: { 'text-color': c.ink, 'text-halo-color': c.halo, 'text-halo-width': 1.5 } });
+
       // Own position: blue dot with a soft halo.
       map.addSource('me', {
         type: 'geojson',
@@ -148,16 +203,35 @@ export default function MapScreen() {
       map.addLayer({ id: 'me-dot', type: 'circle', source: 'me',
         paint: { 'circle-radius': 6, 'circle-color': '#2F6FE0', 'circle-stroke-width': 2, 'circle-stroke-color': '#FFFFFF' } });
 
-      map.on('click', 'clusters', (e) => {
+      map.on('click', 'clusters', async (e) => {
         const f = e.features?.[0];
         if (!f) return;
         const src: any = map.getSource(SOURCE);
-        src.getClusterLeaves((f.properties as any).cluster_id, 500, 0, (err: any, leaves: any[]) => {
-          if (err) return;
-          const ids = new Set(leaves.map((l) => l.properties.id));
-          setClusterPick(visibleRef.current.filter((p) => ids.has(p.id)));
-        });
+        try {
+          const leaves = await getLeaves(src, (f.properties as any).cluster_id);
+          const ids = new Set(leaves.map((l: any) => l.properties.id));
+          setSpider({
+            leaves: visibleRef.current.filter((p) => ids.has(p.id)),
+            center: { lat: (f.geometry as any).coordinates[1], lon: (f.geometry as any).coordinates[0] },
+          });
+        } catch (err) {
+          console.warn('Fadlan: cluster lookup failed', String(err));
+        }
       });
+      map.on('click', 'spider-points', (e) => {
+        const id = e.features?.[0]?.properties?.id;
+        const p = visibleRef.current.find((x) => x.id === id);
+        if (p) { setSpider(null); setSelected(p); }
+      });
+      map.on('click', (e) => {
+        const hits = map.queryRenderedFeatures(e.point, { layers: ['clusters', 'point', 'spider-points'] });
+        if (!hits.length && pickingRef.current) {
+          setVirtualAt({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+          return;
+        }
+        if (!hits.length) setSpider(null);
+      });
+      map.on('movestart', () => setSpider(null));
       map.on('click', 'point', (e) => {
         const id = e.features?.[0]?.properties?.id;
         const p = visibleRef.current.find((x) => x.id === id);
@@ -185,6 +259,51 @@ export default function MapScreen() {
     src?.setData(collection);
   }, [collection]);
 
+  useEffect(() => {
+    const v: any = mapRef.current?.getSource('virtual');
+    v?.setData(pointFC(virtual));
+  }, [virtual]);
+
+  useEffect(() => {
+    const m = mapRef.current;
+    if (m) m.getCanvas().style.cursor = picking ? 'crosshair' : '';
+  }, [picking]);
+
+  // Spread-out cluster: place the members on a spiral around the cluster centre (screen-space spacing).
+  useEffect(() => {
+    const m = mapRef.current;
+    const lines: any = m?.getSource('spider-lines');
+    const pts: any = m?.getSource('spider-points');
+    if (!m || !lines || !pts) return;
+    if (!spider) {
+      lines.setData(EMPTY_FC);
+      pts.setData(EMPTY_FC);
+      return;
+    }
+    const origin = m.project([spider.center.lon, spider.center.lat]);
+    const placed = spider.leaves.map((p, i) => {
+      const r = 22 * Math.sqrt(i + 1);
+      const th = i * 2.399963; // golden angle
+      const ll = m.unproject([origin.x + r * Math.cos(th), origin.y + r * Math.sin(th)]);
+      return { p, lng: ll.lng, lat: ll.lat };
+    });
+    lines.setData({
+      type: 'FeatureCollection',
+      features: placed.map((f) => ({
+        type: 'Feature', properties: {},
+        geometry: { type: 'LineString', coordinates: [[spider.center.lon, spider.center.lat], [f.lng, f.lat]] },
+      })),
+    });
+    pts.setData({
+      type: 'FeatureCollection',
+      features: placed.map((f) => ({
+        type: 'Feature',
+        properties: { id: f.p.id, name: displayTitle(f.p, activeLangs) },
+        geometry: { type: 'Point', coordinates: [f.lng, f.lat] },
+      })),
+    });
+  }, [spider, activeLangs]);
+
   // Colours follow the app style; the selected marker is highlighted.
   useEffect(() => {
     const m = mapRef.current;
@@ -211,6 +330,7 @@ export default function MapScreen() {
     countText: { fontSize: 11, color: c.muted, fontFamily: theme.fonts.body },
     styleBtn: { position: 'absolute', top: 52, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     styleBtnText: { color: c.ink, fontWeight: '600', fontFamily: theme.fonts.body },
+    posBtn: { position: 'absolute', top: 96, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     pickWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12 },
     pickCard: { backgroundColor: c.background, borderRadius: theme.shape.sheetRadius, padding: 14, maxHeight: '55%', elevation: 4 },
     pickHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
@@ -260,7 +380,7 @@ export default function MapScreen() {
       )}
 
       <View style={styles.count} pointerEvents="none">
-        <Text style={styles.countText}>{loading ? 'Searching...' : `${visiblePlaces.length} places`}</Text>
+        <Text style={styles.countText}>{picking ? 'Tap the map to set your position' : loading ? 'Searching...' : virtual ? `${visiblePlaces.length} places \u00B7 virtual position` : `${visiblePlaces.length} places`}</Text>
       </View>
 
       {loading && <View style={styles.loading}><ActivityIndicator size="small" color={c.accent} /></View>}
@@ -269,26 +389,11 @@ export default function MapScreen() {
         <Text style={styles.styleBtnText}>Style</Text>
       </Pressable>
 
-      {clusterPick && !selected && (
-        <View style={styles.pickWrap}>
-          <View style={styles.pickCard}>
-            <View style={styles.pickHead}>
-              <Text style={styles.pickTitle}>{clusterPick.length} places here</Text>
-              <Pressable onPress={() => setClusterPick(null)}><Text style={styles.pickClose}>Close</Text></Pressable>
-            </View>
-            <ScrollView>
-              {clusterPick.map((p) => (
-                <Pressable key={p.id} style={styles.pickRow} onPress={() => { setClusterPick(null); setSelected(p); }}>
-                  <Text style={styles.pickName}>{displayTitle(p, activeLangs)}</Text>
-                  {!!p.description && <Text style={styles.pickDesc} numberOfLines={1}>{p.description}</Text>}
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      )}
+      <Pressable style={styles.posBtn} onPress={virtual ? backToReal : () => setPicking((x) => !x)}>
+        <Text style={styles.styleBtnText}>{virtual ? 'My position' : picking ? 'Cancel' : 'Set position'}</Text>
+      </Pressable>
 
-      {selected && <PlaceSheet place={selected} langs={activeLangs} here={pos} onClose={() => setSelected(null)} />}
+      {selected && <PlaceSheet place={selected} langs={activeLangs} here={here as LatLon} onClose={() => setSelected(null)} />}
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </View>
   );
