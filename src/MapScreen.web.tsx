@@ -45,7 +45,7 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [style, setStyle] = useState<any>(null);
-  const [spider, setSpider] = useState<{ leaves: Place[]; center: LatLon } | null>(null);
+  const [spider, setSpider] = useState<{ leaves: Place[]; center: LatLon; clusterId: number } | null>(null);
   const [virtual, setVirtual] = useState<LatLon | null>(null);   // null = real position
   const [picking, setPicking] = useState(false);
   const virtualRef = useRef<LatLon | null>(null);
@@ -186,7 +186,7 @@ export default function MapScreen() {
       map.addSource('spider-lines', { type: 'geojson', data: EMPTY_FC as any });
       map.addSource('spider-points', { type: 'geojson', data: EMPTY_FC as any });
       map.addLayer({ id: 'spider-lines', type: 'line', source: 'spider-lines',
-        paint: { 'line-color': c.ink, 'line-width': 1.5, 'line-opacity': 0.7 } });
+        paint: { 'line-color': c.ink, 'line-width': 1.5, 'line-opacity': 0.4 } });
       map.addLayer({ id: 'spider-points', type: 'circle', source: 'spider-points',
         paint: { 'circle-radius': 7, 'circle-color': c.markerSelected, 'circle-stroke-width': 2, 'circle-stroke-color': c.markerStroke } });
       map.addLayer({ id: 'spider-labels', type: 'symbol', source: 'spider-points',
@@ -211,6 +211,7 @@ export default function MapScreen() {
           const leaves = await getLeaves(src, (f.properties as any).cluster_id);
           const ids = new Set(leaves.map((l: any) => l.properties.id));
           setSpider({
+            clusterId: (f.properties as any).cluster_id,
             leaves: visibleRef.current.filter((p) => ids.has(p.id)),
             center: { lat: (f.geometry as any).coordinates[1], lon: (f.geometry as any).coordinates[0] },
           });
@@ -269,7 +270,17 @@ export default function MapScreen() {
     if (m) m.getCanvas().style.cursor = picking ? 'crosshair' : '';
   }, [picking]);
 
-  // Spread-out cluster: place the members on a spiral around the cluster centre (screen-space spacing).
+  // The opened cluster's big circle disappears; it returns when the spread is closed.
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !m.getLayer('clusters')) return;
+    const base: any = ['has', 'point_count'];
+    const filter: any = spider ? ['all', base, ['!=', ['get', 'cluster_id'], spider.clusterId]] : base;
+    m.setFilter('clusters', filter);
+    m.setFilter('cluster-count', filter);
+  }, [spider]);
+
+  // Spread-out cluster: place the members on a ring around the cluster centre.
   useEffect(() => {
     const m = mapRef.current;
     const lines: any = m?.getSource('spider-lines');
@@ -281,9 +292,11 @@ export default function MapScreen() {
       return;
     }
     const origin = m.project([spider.center.lon, spider.center.lat]);
+    const n = spider.leaves.length;
+    const ring = Math.max(40, (n * 22) / (2 * Math.PI)); // about 22 px between neighbouring circles
     const placed = spider.leaves.map((p, i) => {
-      const r = 22 * Math.sqrt(i + 1);
-      const th = i * 2.399963; // golden angle
+      const r = ring;
+      const th = (2 * Math.PI * i) / n - Math.PI / 2;
       const ll = m.unproject([origin.x + r * Math.cos(th), origin.y + r * Math.sin(th)]);
       return { p, lng: ll.lng, lat: ll.lat };
     });
@@ -331,6 +344,7 @@ export default function MapScreen() {
     styleBtn: { position: 'absolute', top: 52, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     styleBtnText: { color: c.ink, fontWeight: '600', fontFamily: theme.fonts.body },
     posBtn: { position: 'absolute', top: 96, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
+    myBtn: { position: 'absolute', top: 140, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     pickWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12 },
     pickCard: { backgroundColor: c.background, borderRadius: theme.shape.sheetRadius, padding: 14, maxHeight: '55%', elevation: 4 },
     pickHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
@@ -389,9 +403,15 @@ export default function MapScreen() {
         <Text style={styles.styleBtnText}>Style</Text>
       </Pressable>
 
-      <Pressable style={styles.posBtn} onPress={virtual ? backToReal : () => setPicking((x) => !x)}>
-        <Text style={styles.styleBtnText}>{virtual ? 'My position' : picking ? 'Cancel' : 'Set position'}</Text>
+      <Pressable style={styles.posBtn} onPress={() => setPicking((x) => !x)}>
+        <Text style={styles.styleBtnText}>{picking ? 'Cancel' : 'Set position'}</Text>
       </Pressable>
+
+      {virtual && (
+        <Pressable style={styles.myBtn} onPress={backToReal}>
+          <Text style={styles.styleBtnText}>My position</Text>
+        </Pressable>
+      )}
 
       {selected && <PlaceSheet place={selected} langs={activeLangs} here={here as LatLon} onClose={() => setSelected(null)} />}
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />

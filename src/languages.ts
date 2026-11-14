@@ -5,7 +5,7 @@ import { MAX_EDITIONS } from './config';
 
 // Country (ISO 3166-1 alpha-2) -> Wikipedia language codes of the place. Extend as needed.
 const LOCAL: Record<string, string[]> = {
-  CH: ['de', 'fr', 'it'], DE: ['de'], AT: ['de'], FR: ['fr'], IT: ['it'], ES: ['es'], PT: ['pt'],
+  CH: ['de', 'fr', 'it', 'rm'], DE: ['de'], AT: ['de'], FR: ['fr'], IT: ['it'], ES: ['es'], PT: ['pt'],
   GR: ['el'], TR: ['tr'], EG: ['ar'], JO: ['ar'], LB: ['ar'], MA: ['ar'], TN: ['ar'], IL: ['he'],
   NL: ['nl'], BE: ['nl', 'fr'], PL: ['pl'], CZ: ['cs'], HU: ['hu'], RO: ['ro'], BG: ['bg'],
   HR: ['hr'], RS: ['sr'], AL: ['sq'], SE: ['sv'], NO: ['no'], DK: ['da'], FI: ['fi'],

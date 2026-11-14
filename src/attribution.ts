@@ -3,7 +3,7 @@ import type { ArticleRef } from './types';
 const NAMES: Record<string, string> = {
   en: 'English', de: 'Deutsch', fr: 'Français', it: 'Italiano', es: 'Español', pt: 'Português',
   el: 'Ελληνικά', ar: 'العربية', tr: 'Türkçe', nl: 'Nederlands', pl: 'Polski', ru: 'Русский',
-  ja: '日本語', zh: '中文', he: 'עברית', cs: 'Čeština', sv: 'Svenska', hu: 'Magyar',
+  ja: '日本語', rm: 'Rumantsch', zh: '中文', he: 'עברית', cs: 'Čeština', sv: 'Svenska', hu: 'Magyar',
 };
 
 export const languageName = (lang: string) => NAMES[lang] ?? lang.toUpperCase();
