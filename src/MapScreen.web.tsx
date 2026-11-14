@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Location from 'expo-location';
-import * as maplibregl from 'maplibre-gl';
+import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { RADIUS_M, REFETCH_FRACTION } from './config';
 import { countryCode, languagesForCountry, pickEditions, userLanguage } from './languages';
@@ -16,10 +16,6 @@ import { loadPatchedStyle } from './theme/styleFix';
 import SettingsModal from './SettingsModal';
 import PlaceSheet from './PlaceSheet';
 import type { LatLon, Place } from './types';
-
-if (typeof document !== 'undefined') {
-  maplibregl.setWorkerUrl(new URL('maplibre-gl-worker.js', document.baseURI).href);
-}
 
 const SOURCE = 'places';
 const FONT = ['Noto Sans Regular'];
@@ -37,6 +33,7 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [style, setStyle] = useState<any>(null);
+  const [clusterPick, setClusterPick] = useState<Place[] | null>(null);
 
   const containerRef = useRef<any>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -139,12 +136,24 @@ export default function MapScreen() {
         layout: { 'text-field': ['get', 'name'], 'text-size': 11, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-optional': true, 'text-font': FONT },
         paint: { 'text-color': c.ink, 'text-halo-color': c.halo, 'text-halo-width': 1.5 } });
 
+      // Own position: blue dot with a soft halo.
+      map.addSource('me', {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [pos.lon, pos.lat] } },
+      });
+      map.addLayer({ id: 'me-halo', type: 'circle', source: 'me',
+        paint: { 'circle-radius': 16, 'circle-color': '#2F6FE0', 'circle-opacity': 0.2 } });
+      map.addLayer({ id: 'me-dot', type: 'circle', source: 'me',
+        paint: { 'circle-radius': 6, 'circle-color': '#2F6FE0', 'circle-stroke-width': 2, 'circle-stroke-color': '#FFFFFF' } });
+
       map.on('click', 'clusters', (e) => {
         const f = e.features?.[0];
         if (!f) return;
         const src: any = map.getSource(SOURCE);
-        src.getClusterExpansionZoom((f.properties as any).cluster_id, (err: any, zoom: number) => {
-          if (!err) map.easeTo({ center: (f.geometry as any).coordinates, zoom, duration: 400 });
+        src.getClusterLeaves((f.properties as any).cluster_id, 500, 0, (err: any, leaves: any[]) => {
+          if (err) return;
+          const ids = new Set(leaves.map((l) => l.properties.id));
+          setClusterPick(visibleRef.current.filter((p) => ids.has(p.id)));
         });
       });
       map.on('click', 'point', (e) => {
@@ -200,6 +209,14 @@ export default function MapScreen() {
     countText: { fontSize: 11, color: c.muted, fontFamily: theme.fonts.body },
     styleBtn: { position: 'absolute', top: 52, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     styleBtnText: { color: c.ink, fontWeight: '600', fontFamily: theme.fonts.body },
+    pickWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12 },
+    pickCard: { backgroundColor: c.background, borderRadius: theme.shape.sheetRadius, padding: 14, maxHeight: '55%', elevation: 4 },
+    pickHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+    pickTitle: { fontSize: 16, fontWeight: '600', color: c.ink, fontFamily: theme.fonts.heading },
+    pickClose: { color: c.accent, fontWeight: '600', fontFamily: theme.fonts.body },
+    pickRow: { paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth, borderColor: c.line },
+    pickName: { fontSize: 15, color: c.ink, fontFamily: theme.fonts.body },
+    pickDesc: { fontSize: 12, color: c.muted, marginTop: 2, fontFamily: theme.fonts.body },
   }), [theme, c]);
 
   if (status !== 'ready' || !pos) {
@@ -249,6 +266,25 @@ export default function MapScreen() {
       <Pressable style={styles.styleBtn} onPress={() => setSettingsOpen(true)} accessibilityLabel="Appearance settings">
         <Text style={styles.styleBtnText}>Style</Text>
       </Pressable>
+
+      {clusterPick && !selected && (
+        <View style={styles.pickWrap}>
+          <View style={styles.pickCard}>
+            <View style={styles.pickHead}>
+              <Text style={styles.pickTitle}>{clusterPick.length} places here</Text>
+              <Pressable onPress={() => setClusterPick(null)}><Text style={styles.pickClose}>Close</Text></Pressable>
+            </View>
+            <ScrollView>
+              {clusterPick.map((p) => (
+                <Pressable key={p.id} style={styles.pickRow} onPress={() => { setClusterPick(null); setSelected(p); }}>
+                  <Text style={styles.pickName}>{displayTitle(p, activeLangs)}</Text>
+                  {!!p.description && <Text style={styles.pickDesc} numberOfLines={1}>{p.description}</Text>}
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      )}
 
       {selected && <PlaceSheet place={selected} langs={activeLangs} here={pos} onClose={() => setSelected(null)} />}
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
