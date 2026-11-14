@@ -1,25 +1,33 @@
 {
   "expo": {
-    "name": "fadlan",
+    "name": "Fadlan",
     "slug": "fadlan",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "org.example.fadlan",
+      "supportsTablet": false
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
+      "package": "org.example.fadlan"
     },
+    "plugins": [
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Fadlan uses your position to show nearby places of interest on the map."
+        }
+      ]
+    ],
     "web": {
-      "favicon": "./assets/favicon.png"
+      "bundler": "metro",
+      "output": "single",
+      "name": "Fadlan",
+      "shortName": "Fadlan",
+      "themeColor": "#F1E7C8",
+      "backgroundColor": "#F1E7C8",
+      "display": "standalone"
     }
   }
 }
