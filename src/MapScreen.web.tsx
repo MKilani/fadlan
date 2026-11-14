@@ -46,6 +46,7 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [offCats, setOffCats] = useState<string[]>(['other']);   // categories hidden by the user (Other is hidden by default)
+  const [catStatus, setCatStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [style, setStyle] = useState<any>(null);
   const [spider, setSpider] = useState<{ leaves: Place[]; center: LatLon; clusterId: number } | null>(null);
   const [virtual, setVirtual] = useState<LatLon | null>(null);   // null = real position
@@ -72,10 +73,20 @@ export default function MapScreen() {
     if (next.length) setPicked(next);
   };
 
-  // Places still being classified (no category yet) stay visible until their category is known.
+  // How many places each category has (for the chip labels). A place without a category counts as Other.
+  const catCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    places.filter((p) => p.articles.some((a) => activeLangs.includes(a.lang))).forEach((p) => {
+      const k = p.category ?? 'other';
+      m[k] = (m[k] ?? 0) + 1;
+    });
+    return m;
+  }, [places, activeLangs]);
+
+  // A place without a category is treated as Other, so it follows the Other chip.
   const visiblePlaces = useMemo(
     () => places.filter((p) =>
-      p.articles.some((a) => activeLangs.includes(a.lang)) && (!p.category || !offCats.includes(p.category))),
+      p.articles.some((a) => activeLangs.includes(a.lang)) && !offCats.includes(p.category ?? 'other')),
     [places, activeLangs, offCats],
   );
   const collection = useMemo(() => ({
@@ -105,15 +116,20 @@ export default function MapScreen() {
         return [...byId.values()];
       });
       // Categories are added after the places are shown, so the map is never blocked by the lookups.
+      setCatStatus('loading');
       assignCategories(found)
         .then((withCats) => {
+          setCatStatus('done');
           setPlaces((prev) => {
             const byId = new Map(prev.map((p) => [p.id, p]));
             withCats.forEach((p) => byId.set(p.id, p));
             return [...byId.values()];
           });
         })
-        .catch((e) => console.warn('Fadlan: categories failed', String(e)));
+        .catch((e) => {
+          setCatStatus('error');
+          console.warn('Fadlan: categories failed', String(e));
+        });
     } finally {
       setLoading(false);
     }
@@ -385,6 +401,13 @@ export default function MapScreen() {
     );
   }
 
+  const n = visiblePlaces.length;
+  const countLabel =
+    (picking ? 'Tap the map to set your position'
+      : loading ? 'Searching...'
+      : `${n} places${virtual ? ' · virtual position' : ''}`)
+    + (catStatus === 'loading' ? ' · classifying' : catStatus === 'error' ? ' · categories unavailable' : '');
+
   return (
     <View style={{ flex: 1 }}>
       <View ref={containerRef} style={{ flex: 1 }} />
@@ -418,7 +441,7 @@ export default function MapScreen() {
                 onPress={() => setOffCats((o) => (o.includes(cat.id) ? o.filter((x) => x !== cat.id) : [...o, cat.id]))}
                 style={[styles.lchip, on && { backgroundColor: c.chipOn }]}
               >
-                <Text style={[styles.lchipText, { color: on ? c.chipOnText : c.chipText }]}>{cat.label}</Text>
+                <Text style={[styles.lchipText, { color: on ? c.chipOnText : c.chipText }]}>{cat.label} ({catCounts[cat.id] ?? 0})</Text>
               </Pressable>
             );
           })}
@@ -426,7 +449,7 @@ export default function MapScreen() {
       </View>
 
       <View style={styles.count} pointerEvents="none">
-        <Text style={styles.countText}>{picking ? 'Tap the map to set your position' : loading ? 'Searching...' : virtual ? `${visiblePlaces.length} places \u00B7 virtual position` : `${visiblePlaces.length} places`}</Text>
+        <Text style={styles.countText}>{countLabel}</Text>
       </View>
 
       {loading && <View style={styles.loading}><ActivityIndicator size="small" color={c.accent} /></View>}
