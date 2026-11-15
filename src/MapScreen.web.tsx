@@ -39,6 +39,8 @@ export default function MapScreen() {
 
   const [pos, setPos] = useState<LatLon | null>(null);
   const [places, setPlaces] = useState<Place[]>([]);
+  const placesRef = useRef<Place[]>([]);
+  placesRef.current = places;
   const [langs, setLangs] = useState<string[]>(['en']);
   const [picked, setPicked] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<Place | null>(null);
@@ -108,7 +110,7 @@ export default function MapScreen() {
       const cc = await countryCode(center.lat, center.lon);
       setRegion(regionOf(cc));
       const editions = pickEditions(userLanguage(), languagesForCountry(cc));
-      setLangs(editions);
+      setLangs((prev) => [...new Set([...prev, ...editions])]);
       const found = await loadPlaces({ center, radiusM: RADIUS_M, langs: editions });
       setPlaces((prev) => {
         const byId = new Map(prev.map((p) => [p.id, p]));
@@ -117,7 +119,10 @@ export default function MapScreen() {
       });
       // Categories are added after the places are shown, so the map is never blocked by the lookups.
       setCatStatus('loading');
-      assignCategories(found)
+      const known = new Map<string, string>(
+        placesRef.current.filter((p) => p.category).map((p) => [p.id, p.category as string]),
+      );
+      assignCategories(found, known)
         .then((withCats) => {
           setCatStatus('done');
           setPlaces((prev) => {
@@ -366,16 +371,17 @@ export default function MapScreen() {
     btn: { backgroundColor: c.chipOn, paddingHorizontal: 20, paddingVertical: 12, borderRadius: theme.shape.buttonRadius },
     btnText: { color: c.chipOnText, fontWeight: '600' },
     loading: { position: 'absolute', top: 104, alignSelf: 'center', backgroundColor: c.background, padding: 8, borderRadius: 20 },
-    langBar: { position: 'absolute', top: 52, left: 12, right: 84 },
+    langBar: { position: 'absolute', top: 96, left: 12, right: 12 },
     lchip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: theme.shape.chipRadius, backgroundColor: c.background, borderWidth: 1, borderColor: c.chipOn },
     lchipText: { fontSize: 12, fontFamily: theme.fonts.body, fontWeight: '600' },
-    count: { position: 'absolute', top: 132, left: 12, paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.shape.chipRadius, backgroundColor: c.background },
+    count: { position: 'absolute', top: 176, left: 12, paddingHorizontal: 10, paddingVertical: 4, borderRadius: theme.shape.chipRadius, backgroundColor: c.background },
     countText: { fontSize: 11, color: c.muted, fontFamily: theme.fonts.body },
-    styleBtn: { position: 'absolute', top: 52, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
+    styleBtn: { height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     styleBtnText: { color: c.ink, fontWeight: '600', fontFamily: theme.fonts.body },
-    catBar: { position: 'absolute', top: 92, left: 12, right: 84 },
-    posBtn: { position: 'absolute', top: 96, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
-    myBtn: { position: 'absolute', top: 140, right: 12, height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
+    toolbar: { position: 'absolute', top: 48, left: 0, right: 12, flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+    catBar: { position: 'absolute', top: 136, left: 12, right: 12 },
+    posBtn: { height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
+    myBtn: { height: 36, paddingHorizontal: 14, justifyContent: 'center', borderRadius: theme.shape.buttonRadius, backgroundColor: c.background },
     pickWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 12 },
     pickCard: { backgroundColor: c.background, borderRadius: theme.shape.sheetRadius, padding: 14, maxHeight: '55%', elevation: 4 },
     pickHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
@@ -433,6 +439,14 @@ export default function MapScreen() {
 
       <View style={styles.catBar}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+          <Pressable
+            onPress={() => setOffCats([])}
+            style={[styles.lchip, offCats.length === 0 && { backgroundColor: c.chipOn }]}
+          >
+            <Text style={[styles.lchipText, { color: offCats.length === 0 ? c.chipOnText : c.chipText }]}>
+              All ({Object.values(catCounts).reduce((a: number, b: number) => a + b, 0)})
+            </Text>
+          </Pressable>
           {CATEGORIES.map((cat) => {
             const on = !offCats.includes(cat.id);
             return (
@@ -454,19 +468,21 @@ export default function MapScreen() {
 
       {loading && <View style={styles.loading}><ActivityIndicator size="small" color={c.accent} /></View>}
 
-      <Pressable style={styles.styleBtn} onPress={() => setSettingsOpen(true)} accessibilityLabel="Appearance settings">
-        <Text style={styles.styleBtnText}>Style</Text>
-      </Pressable>
-
-      <Pressable style={styles.posBtn} onPress={() => setPicking((x) => !x)}>
-        <Text style={styles.styleBtnText}>{picking ? 'Cancel' : 'Set position'}</Text>
-      </Pressable>
-
-      {virtual && (
-        <Pressable style={styles.myBtn} onPress={backToReal}>
-          <Text style={styles.styleBtnText}>My position</Text>
+      <View style={styles.toolbar}>
+        <Pressable style={styles.styleBtn} onPress={() => setSettingsOpen(true)} accessibilityLabel="Appearance settings">
+          <Text style={styles.styleBtnText}>Style</Text>
         </Pressable>
-      )}
+
+        <Pressable style={styles.posBtn} onPress={() => setPicking((x) => !x)}>
+          <Text style={styles.styleBtnText}>{picking ? 'Cancel' : 'Set position'}</Text>
+        </Pressable>
+
+        {virtual && (
+          <Pressable style={styles.myBtn} onPress={backToReal}>
+            <Text style={styles.styleBtnText}>My position</Text>
+          </Pressable>
+        )}
+      </View>
 
       {selected && <PlaceSheet place={selected} langs={activeLangs} here={here as LatLon} onClose={() => setSelected(null)} />}
       <SettingsModal visible={settingsOpen} onClose={() => setSettingsOpen(false)} />

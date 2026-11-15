@@ -38,15 +38,15 @@ const ANCHORS: Record<string, CategoryId> = {
   Q486972: 'nature',       // human settlement
 };
 
-// When several categories are found at the same depth, the first one in this list wins.
+// When several categories are found, the first one in this list wins.
 const PRIORITY: CategoryId[] = ['archaeology', 'religious', 'museums', 'monuments', 'nature'];
 const MAX_DEPTH = 4;
 const API = 'https://www.wikidata.org/w/api.php';
 
-// Memory caches for the session; the app also caches the place results on the phone and in the browser.
-const itemTypes = new Map<string, string[]>();   // item Q-id -> instance-of types
-const typeParents = new Map<string, string[]>(); // type Q-id -> subclass-of parents
-const typeCategory = new Map<string, CategoryId | null>();
+// Session caches: each Wikidata item and type is fetched once.
+const itemTypes = new Map<string, string[]>();          // item Q-id -> instance-of types
+const typeParents = new Map<string, string[]>();        // type Q-id -> subclass-of parents
+const typeCategory = new Map<string, CategoryId | null>(); // type Q-id -> category (or null if none)
 
 function claimIds(claims: any, prop: string): string[] {
   return (claims?.[prop] ?? []).map((c: any) => c?.mainsnak?.datavalue?.value?.id).filter(Boolean);
@@ -59,29 +59,33 @@ async function getEntities(params: Record<string, string>): Promise<any> {
   return res.json();
 }
 
+// Splits a list into chunks of 50 (the API limit) and runs them in parallel.
+function chunks<T>(list: T[], size = 50): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
 async function loadItemTypes(qids: string[]) {
   const missing = [...new Set(qids)].filter((q) => !itemTypes.has(q));
-  for (let i = 0; i < missing.length; i += 50) {
-    const chunk = missing.slice(i, i + 50);
+  await Promise.all(chunks(missing).map(async (chunk) => {
     const j = await getEntities({ ids: chunk.join('|'), props: 'claims' });
     for (const q of chunk) itemTypes.set(q, claimIds(j?.entities?.[q]?.claims, 'P31'));
-  }
+  }));
 }
 
 async function loadParents(typeIds: string[]) {
   const missing = [...new Set(typeIds)].filter((q) => !typeParents.has(q));
-  for (let i = 0; i < missing.length; i += 50) {
-    const chunk = missing.slice(i, i + 50);
+  await Promise.all(chunks(missing).map(async (chunk) => {
     const j = await getEntities({ ids: chunk.join('|'), props: 'claims' });
     for (const q of chunk) typeParents.set(q, claimIds(j?.entities?.[q]?.claims, 'P279'));
-  }
+  }));
 }
 
 // For articles whose Wikidata item is not known: find the item by title on that Wikipedia edition.
 async function itemsByTitle(lang: string, titles: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  for (let i = 0; i < titles.length; i += 50) {
-    const chunk = titles.slice(i, i + 50);
+  await Promise.all(chunks(titles).map(async (chunk) => {
     const j = await getEntities({ sites: `${lang}wiki`, titles: chunk.join('|'), props: 'claims|sitelinks' });
     for (const [q, ent] of Object.entries<any>(j?.entities ?? {})) {
       if (q.startsWith('-')) continue;
@@ -89,37 +93,59 @@ async function itemsByTitle(lang: string, titles: string[]): Promise<Map<string,
       const title = ent.sitelinks?.[`${lang}wiki`]?.title;
       if (title) out.set(title, q);
     }
-  }
+  }));
   return out;
 }
 
-// Walk up from the place's types; the closest anchor wins, ties go by PRIORITY.
-async function categoryOfTypes(types: string[]): Promise<CategoryId> {
-  const key = [...types].sort().join(',');
-  if (typeCategory.has(key)) return typeCategory.get(key) ?? 'other';
+// Resolves the category of many types at once. Each type walks up its own parents, one level per step,
+// and takes the closest anchor it reaches. Every level is fetched in parallel batches.
+async function resolveTypes(types: string[]) {
+  const pending = [...new Set(types)].filter((t) => !typeCategory.has(t));
+  if (!pending.length) return;
 
-  let frontier = [...new Set(types)];
-  const seen = new Set<string>(frontier);
-  let found: CategoryId | null = null;
-  for (let depth = 0; depth <= MAX_DEPTH && frontier.length; depth++) {
-    const hits = frontier.map((t) => ANCHORS[t]).filter(Boolean) as CategoryId[];
-    found = PRIORITY.find((p) => hits.includes(p)) ?? null;
-    if (found) break;
-    await loadParents(frontier);
-    const next = frontier.flatMap((t) => typeParents.get(t) ?? []).filter((t) => !seen.has(t));
-    next.forEach((t) => seen.add(t));
-    frontier = [...new Set(next)];
+  let layers = new Map<string, string[]>(pending.map((t) => [t, [t]]));   // type -> current level
+  const seen = new Map<string, Set<string>>(pending.map((t) => [t, new Set([t])]));
+
+  for (let depth = 0; depth <= MAX_DEPTH && layers.size; depth++) {
+    for (const [t, layer] of [...layers]) {
+      const hits = layer.map((x) => ANCHORS[x]).filter(Boolean) as CategoryId[];
+      const hit = PRIORITY.find((p) => hits.includes(p));
+      if (hit) {
+        typeCategory.set(t, hit);
+        layers.delete(t);
+      }
+    }
+    if (depth === MAX_DEPTH || !layers.size) break;
+
+    await loadParents([...new Set([...layers.values()].flat())]);
+
+    const next = new Map<string, string[]>();
+    for (const [t, layer] of layers) {
+      const s = seen.get(t)!;
+      const parents = [...new Set(layer.flatMap((x) => typeParents.get(x) ?? []))].filter((x) => !s.has(x));
+      parents.forEach((x) => s.add(x));
+      if (parents.length) next.set(t, parents);
+    }
+    layers = next;
   }
-  typeCategory.set(key, found);
-  return found ?? 'other';
+  for (const t of pending) if (!typeCategory.has(t)) typeCategory.set(t, null);
 }
 
-// Adds a category to every place. Places whose type cannot be determined become "other".
-export async function assignCategories(places: Place[]): Promise<Place[]> {
+// The category of a place: the best of its types, by PRIORITY.
+function categoryOf(qid: string | undefined): CategoryId {
+  const cats = (qid ? itemTypes.get(qid) ?? [] : [])
+    .map((t) => typeCategory.get(t))
+    .filter(Boolean) as CategoryId[];
+  return PRIORITY.find((p) => cats.includes(p)) ?? 'other';
+}
+
+// Adds a category to every place. Places in `known` keep their category and are not looked up again.
+export async function assignCategories(places: Place[], known?: Map<string, string>): Promise<Place[]> {
+  const todo = places.filter((p) => !known?.has(p.id));
   const qidOf = new Map<string, string>();
   const titlesByLang = new Map<string, { id: string; title: string }[]>();
 
-  for (const p of places) {
+  for (const p of todo) {
     if (p.id.startsWith('wd:')) {
       qidOf.set(p.id, p.id.slice(3));
       continue;
@@ -131,21 +157,22 @@ export async function assignCategories(places: Place[]): Promise<Place[]> {
     titlesByLang.set(a.lang, list);
   }
 
-  for (const [lang, items] of titlesByLang) {
+  // 1) the Wikidata item of each place (in parallel per language)
+  await Promise.all([...titlesByLang].map(async ([lang, items]) => {
     const found = await itemsByTitle(lang, items.map((x) => x.title));
     for (const x of items) {
       const q = found.get(x.title);
       if (q) qidOf.set(x.id, q);
     }
-  }
+  }));
 
+  // 2) the types of all items, 3) the category of all types, 4) each place
   await loadItemTypes([...qidOf.values()]);
+  const allTypes = [...qidOf.values()].flatMap((q) => itemTypes.get(q) ?? []);
+  await resolveTypes(allTypes);
 
-  const category = new Map<string, CategoryId>();
-  for (const p of places) {
-    const q = qidOf.get(p.id);
-    const types = q ? itemTypes.get(q) ?? [] : [];
-    category.set(p.id, types.length ? await categoryOfTypes(types) : 'other');
-  }
-  return places.map((p) => ({ ...p, category: category.get(p.id) ?? 'other' }));
+  return places.map((p) => ({
+    ...p,
+    category: known?.get(p.id) ?? categoryOf(qidOf.get(p.id)),
+  }));
 }
